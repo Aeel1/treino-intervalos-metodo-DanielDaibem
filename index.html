@@ -35,26 +35,47 @@ async function withAudio(action){try{await unlockAudio();action()}catch(e){$('st
 const mobileAudio=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 let mediaPlayer=null,mediaUrl=null;
 function playMobileWav(midi,semi,metronome=false){
- const rate=22050,bpm=Number($('bpm').value),beat=60/bpm;
- const seconds=metronome?beat*4:1.25,frames=Math.ceil(seconds*rate);
+ const rate=44100,bpm=Number($('bpm').value),beat=60/bpm;
+ const seconds=metronome?Math.max(1.35,beat*4):1.35,frames=Math.ceil(seconds*rate);
  const buffer=new ArrayBuffer(44+frames*2),v=new DataView(buffer);
  const put=(p,t)=>{for(let i=0;i<t.length;i++)v.setUint8(p+i,t.charCodeAt(i))};
- put(0,'RIFF');v.setUint32(4,36+frames*2,true);put(8,'WAVE');put(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);put(36,'data');v.setUint32(40,frames*2,true);
+ put(0,'RIFF');v.setUint32(4,36+frames*2,true);put(8,'WAVE');put(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);put(36,'data');v.setUint32(40,frames*2,true);
  const base=440*Math.pow(2,(midi-69)/12),kind=$('instrument').value;
- function note(t,start,freq,dur){
-  const x=t-start;if(x<0||x>dur)return 0;
-  const env=Math.min(1,x/.009)*Math.exp(-x/(kind==='piano'?.24:.36));
-  const fundamental=Math.sin(2*Math.PI*freq*x);
-  const h2=Math.sin(4*Math.PI*freq*x);
-  const h3=Math.sin(6*Math.PI*freq*x);
-  return env*(kind==='piano'?.28*fundamental+.075*h2+.025*h3:.26*fundamental+.10*h2+.035*h3);
+ const samples=new Float32Array(frames);
+ function addNote(start,freq,dur){
+  const offset=Math.round(start*rate),count=Math.min(frames-offset,Math.round(dur*rate));
+  if(count<=0)return;
+  if(kind==='acoustic'||kind==='electric'){
+   // Karplus-Strong: a plucked string's vibrating delay line and natural decay.
+   const len=Math.max(12,Math.round(rate/freq-.5)),delay=new Float32Array(len);
+   for(let j=0;j<len;j++)delay[j]=(Math.random()*2-1);
+   // Smooth the initial pick noise slightly while keeping a bright attack.
+   let previous=delay[len-1];for(let j=0;j<len;j++){const n=delay[j];delay[j]=.65*n+.35*previous;previous=n}
+   let pos=0,last=0,body=0;
+   const feedback=kind==='acoustic'?.9987:.9991;
+   for(let i=0;i<count;i++){
+    const x=delay[pos],next=delay[(pos+1)%len];
+    const filtered=feedback*(.5*x+.5*next);
+    delay[pos]=filtered;pos=(pos+1)%len;
+    // The guitar body softens harsh frequencies and adds a short woody resonance.
+    body+=.16*(x-body);
+    const t=i/rate,attack=Math.min(1,t/.003);
+    const release=Math.min(1,(count-i)/(rate*.08));
+    const envelope=attack*release*Math.exp(-t/(kind==='acoustic'?1.6:2));
+    const pick=(i<rate*.025?Math.exp(-t*110)*.12*x:0);
+    samples[offset+i]+=(.47*body+.23*x+pick)*envelope;
+    last=x;
+   }
+  }else{
+   for(let i=0;i<count;i++){
+    const t=i/rate,env=Math.min(1,t/.008)*Math.min(1,(count-i)/(rate*.06))*Math.exp(-t/.42);
+    samples[offset+i]+=env*(.27*Math.sin(2*Math.PI*freq*t)+.065*Math.sin(4*Math.PI*freq*t)+.025*Math.sin(6*Math.PI*freq*t));
+   }
+  }
  }
- for(let i=0;i<frames;i++){
-  const t=i/rate;
-  let sample=note(t,0,base,.38)+note(t,.42,base*Math.pow(2,semi/12),.5);
-  if(metronome&&$('click').checked){for(let b=0;b<4;b++){const dt=t-b*beat;if(dt>=0&&dt<.065)sample+=.18*Math.sin(2*Math.PI*(b===0?980:640)*dt)*Math.exp(-dt*65)}}
-  v.setInt16(44+i*2,Math.max(-32767,Math.min(32767,Math.round(sample*28000))),true);
- }
+ addNote(0,base,.65);addNote(.42,base*Math.pow(2,semi/12),.78);
+ if(metronome&&$('click').checked){for(let b=0;b<4;b++){const start=Math.round(b*beat*rate);for(let i=0;i<Math.round(rate*.055)&&start+i<frames;i++){const t=i/rate;samples[start+i]+=.13*Math.sin(2*Math.PI*(b===0?980:640)*t)*Math.exp(-t*75)}}}
+ for(let i=0;i<frames;i++)v.setInt16(44+i*2,Math.round(Math.max(-1,Math.min(1,samples[i]))*29000),true);
  if(!mediaPlayer){mediaPlayer=new Audio();mediaPlayer.playsInline=true;mediaPlayer.preload='auto'}
  mediaPlayer.pause();if(mediaUrl)URL.revokeObjectURL(mediaUrl);
  mediaUrl=URL.createObjectURL(new Blob([buffer],{type:'audio/wav'}));mediaPlayer.src=mediaUrl;mediaPlayer.currentTime=0;
