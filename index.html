@@ -30,10 +30,29 @@ const modules=[
 {name:'07 · Conclusão final (todos)',values:[1,2,3,4,5,6,7,8,9,10,11,12]}];
 let audio,active=false,selected=0,current=null,currentMidi=60,answered=false,accept=false,hits=0,tries=0,streak=0,timeout=null;
 const ctx=()=>audio||(audio=new(window.AudioContext||window.webkitAudioContext)());
+function unlockAudio(){
+ const c=ctx();
+ if(c.state!=='running')c.resume().catch(()=>{});
+ // A short silent source started directly inside the tap event unlocks iOS audio.
+ const buffer=c.createBuffer(1,1,c.sampleRate),source=c.createBufferSource();
+ source.buffer=buffer;source.connect(c.destination);source.start(0);
+ return c;
+}
+const mobileAudio=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 function tone(freq,duration=.45,at=0,vol=.30){
  const c=ctx(),t=c.currentTime+at,kind=$('instrument').value;
  if(kind==='piano'){
   [1,2,3].forEach((harm,i)=>{const o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.setValueAtTime(freq*harm,t);const amp=vol*[.76,.17,.07][i];g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(amp,t+.008);g.gain.exponentialRampToValueAtTime(.0001,t+duration*(1+.15*i));o.connect(g).connect(c.destination);o.start(t);o.stop(t+duration*1.4)});
+ }else if(mobileAudio){
+  // Lightweight plucked-string approximation avoids allocating long audio buffers on phones.
+  const o=c.createOscillator(),g=c.createGain(),f=c.createBiquadFilter();
+  o.type='triangle';o.frequency.setValueAtTime(freq,t);
+  f.type='lowpass';f.frequency.value=kind==='acoustic'?4300:2400;
+  g.gain.setValueAtTime(.0001,t);
+  g.gain.exponentialRampToValueAtTime(Math.max(.0001,vol*.65),t+.008);
+  g.gain.exponentialRampToValueAtTime(.0001,t+Math.max(.15,duration+.35));
+  o.connect(f).connect(g).connect(c.destination);
+  o.start(t);o.stop(t+Math.max(.2,duration+.4));
  }else{
   const sampleRate=c.sampleRate, len=Math.max(2,Math.round(sampleRate/freq));
   const tail=kind==='acoustic'?1.65:1.25;
@@ -63,13 +82,13 @@ function resetBeats(){for(let i=1;i<=4;i++)$('beat'+i).classList.remove('active'
 function enableAnswers(enabled){document.querySelectorAll('#answers button').forEach(b=>b.disabled=!enabled)}
 function update(){ $('hits').textContent=hits;$('tries').textContent=tries;$('streak').textContent=streak;$('rate').textContent=tries?Math.round(100*hits/tries)+'%':'—'}
 function renderModules(){const root=$('modules');root.replaceChildren();modules.forEach((m,i)=>{const b=document.createElement('button');b.className='module'+(i===selected?' selected':'');b.innerHTML='<strong>'+m.name+'</strong><small>'+m.values.map(v=>intervals[v]).join(' × ')+'</small>';b.onclick=()=>selectModule(i);root.append(b)})}
-function renderAnswers(){const root=$('answers'),demo=$('demos');root.replaceChildren();demo.replaceChildren();modules[selected].values.forEach((semi,i)=>{const b=document.createElement('button');b.textContent=(selected===6?'':(i+1)+'. ')+intervals[semi];b.disabled=true;b.onclick=()=>respond(semi);root.append(b);const d=document.createElement('button');d.textContent='♫ '+intervals[semi];d.onclick=async()=>{await ctx().resume();play(chooseMidi(),semi)};demo.append(d)})}
+function renderAnswers(){const root=$('answers'),demo=$('demos');root.replaceChildren();demo.replaceChildren();modules[selected].values.forEach((semi,i)=>{const b=document.createElement('button');b.textContent=(selected===6?'':(i+1)+'. ')+intervals[semi];b.disabled=true;b.onclick=()=>respond(semi);root.append(b);const d=document.createElement('button');d.textContent='♫ '+intervals[semi];d.onclick=async()=>{unlockAudio();play(chooseMidi(),semi)};demo.append(d)})}
 function selectModule(i){if(active)stop();selected=i;hits=tries=streak=0;update();renderModules();renderAnswers();$('moduleDescription').textContent=i===6?'Desafio final: todos os 12 intervalos em ordem aleatória. Responda clicando no nome.':'Compare apenas dois intervalos por vez. Treine até reconhecer ambos sem precisar contar semitons.';$('feedback').textContent='Módulo '+(i+1)+' selecionado. Ouça e responda pelo som.';$('feedback').className='hint';$('status').textContent='Pronto para começar.'}
 function cycle(){if(!active)return;answered=false;accept=false;const values=modules[selected].values;current=values[Math.floor(Math.random()*values.length)];currentMidi=chooseMidi();const duration=60000/Number($('bpm').value);function step(n){if(!active)return;resetBeats();$('beat'+n).classList.add('active');tick(n===1);if(n===1){$('status').textContent='Ouça o intervalo';play(currentMidi,current);enableAnswers(false)}if(n===2)$('status').textContent='Pense na sensação sonora…';if(n===3){accept=true;enableAnswers(true);$('status').textContent='Responda agora!'}if(n===4){accept=false;enableAnswers(false);$('status').textContent=answered?'Prepare-se para o próximo':'Tempo esgotado';if(!answered){tries++;streak=0;update();$('feedback').textContent='Sem resposta. Era '+intervals[current]+'.';$('feedback').className='hint bad'}}if(n<4)timeout=setTimeout(()=>step(n+1),duration);else timeout=setTimeout(()=>$('repeat').checked?cycle():stop(),duration)}step(1)}
 function respond(v){if(!active||!accept||answered)return;answered=true;accept=false;enableAnswers(false);tries++;if(v===current){hits++;streak++;$('feedback').textContent='✓ Correto! '+intervals[current]+'.';$('feedback').className='hint good'}else{streak=0;$('feedback').textContent='✕ Era '+intervals[current]+'. Ouça a diferença e tente novamente.';$('feedback').className='hint bad'}update();$('status').textContent='Resposta registrada'}
 function stop(){active=false;clearTimeout(timeout);resetBeats();enableAnswers(false);$('start').disabled=false;$('stop').disabled=true;$('replay').disabled=current===null;$('status').textContent='Treino pausado'}
-$('start').onclick=async()=>{await ctx().resume();if(active)return;active=true;$('start').disabled=true;$('stop').disabled=false;$('replay').disabled=false;cycle()};
-$('stop').onclick=stop;$('replay').onclick=async()=>{if(current!==null){await ctx().resume();play(currentMidi,current)}};
+$('start').onclick=async()=>{unlockAudio();if(active)return;active=true;$('start').disabled=true;$('stop').disabled=false;$('replay').disabled=false;cycle()};
+$('stop').onclick=stop;$('replay').onclick=async()=>{if(current!==null){unlockAudio();play(currentMidi,current)}};
 $('reset').onclick=()=>{hits=tries=streak=0;update();$('feedback').textContent='Estatísticas zeradas.'};
 $('tonicMode').onchange=()=>{$('fixedWrap').style.display=$('tonicMode').value==='fixed'?'flex':'none'};
 $('bpm').oninput=()=>{$('bpmLabel').textContent=$('bpm').value+' BPM'};
