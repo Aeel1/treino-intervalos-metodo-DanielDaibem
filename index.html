@@ -33,6 +33,34 @@ const ctx=()=>audio||(audio=new(window.AudioContext||window.webkitAudioContext)(
 async function unlockAudio(){const c=ctx();if(c.state!=='running')await c.resume();if(c.state!=='running')throw Error('AudioContext: '+c.state);return c;}
 async function withAudio(action){try{await unlockAudio();action()}catch(e){$('status').textContent='Áudio bloqueado: abra no Safari, confira volume e modo silencioso.';console.error(e)}}
 const mobileAudio=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+let mediaPlayer=null,mediaUrl=null;
+function playMobileWav(midi,semi,metronome=false){
+ const rate=22050,bpm=Number($('bpm').value),beat=60/bpm;
+ const seconds=metronome?beat*4:1.25,frames=Math.ceil(seconds*rate);
+ const buffer=new ArrayBuffer(44+frames*2),v=new DataView(buffer);
+ const put=(p,t)=>{for(let i=0;i<t.length;i++)v.setUint8(p+i,t.charCodeAt(i))};
+ put(0,'RIFF');v.setUint32(4,36+frames*2,true);put(8,'WAVE');put(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);put(36,'data');v.setUint32(40,frames*2,true);
+ const base=440*Math.pow(2,(midi-69)/12),kind=$('instrument').value;
+ function note(t,start,freq,dur){
+  const x=t-start;if(x<0||x>dur)return 0;
+  const env=Math.min(1,x/.009)*Math.exp(-x/(kind==='piano'?.24:.36));
+  const fundamental=Math.sin(2*Math.PI*freq*x);
+  const h2=Math.sin(4*Math.PI*freq*x);
+  const h3=Math.sin(6*Math.PI*freq*x);
+  return env*(kind==='piano'?.28*fundamental+.075*h2+.025*h3:.26*fundamental+.10*h2+.035*h3);
+ }
+ for(let i=0;i<frames;i++){
+  const t=i/rate;
+  let sample=note(t,0,base,.38)+note(t,.42,base*Math.pow(2,semi/12),.5);
+  if(metronome&&$('click').checked){for(let b=0;b<4;b++){const dt=t-b*beat;if(dt>=0&&dt<.065)sample+=.18*Math.sin(2*Math.PI*(b===0?980:640)*dt)*Math.exp(-dt*65)}}
+  v.setInt16(44+i*2,Math.max(-32767,Math.min(32767,Math.round(sample*28000))),true);
+ }
+ if(!mediaPlayer){mediaPlayer=new Audio();mediaPlayer.playsInline=true;mediaPlayer.preload='auto'}
+ mediaPlayer.pause();if(mediaUrl)URL.revokeObjectURL(mediaUrl);
+ mediaUrl=URL.createObjectURL(new Blob([buffer],{type:'audio/wav'}));mediaPlayer.src=mediaUrl;mediaPlayer.currentTime=0;
+ mediaPlayer.play().catch(e=>{$('status').textContent='Falha ao reproduzir áudio: '+e.message});
+}
+
 function wavTestUrl(){
  const rate=22050,frames=rate,bytes=new ArrayBuffer(44+frames*2),view=new DataView(bytes);
  const str=(p,v)=>{for(let i=0;i<v.length;i++)view.setUint8(p+i,v.charCodeAt(i))};
@@ -86,18 +114,18 @@ function tone(freq,duration=.45,at=0,vol=.30){
   source.connect(filter).connect(gain).connect(c.destination);source.start(t);
  }
 }
-function tick(accent){if(!$('click').checked)return;const c=ctx(),t=c.currentTime,o=c.createOscillator(),g=c.createGain();o.type='triangle';o.frequency.value=accent?980:640;g.gain.setValueAtTime(.055,t);g.gain.exponentialRampToValueAtTime(.0001,t+.055);o.connect(g).connect(c.destination);o.start(t);o.stop(t+.06)}
+function tick(accent){if(mobileAudio||!$('click').checked)return;const c=ctx(),t=c.currentTime,o=c.createOscillator(),g=c.createGain();o.type='triangle';o.frequency.value=accent?980:640;g.gain.setValueAtTime(.055,t);g.gain.exponentialRampToValueAtTime(.0001,t+.055);o.connect(g).connect(c.destination);o.start(t);o.stop(t+.06)}
 function chooseMidi(){return $('tonicMode').value==='fixed'?60+Number($('fixedNote').value):48+Math.floor(Math.random()*25)}
-function play(midi,semi){const base=440*Math.pow(2,(midi-69)/12);tone(base,.35,0);tone(base*Math.pow(2,semi/12),.46,.42)}
+function play(midi,semi){if(mobileAudio){playMobileWav(midi,semi,active);return}const base=440*Math.pow(2,(midi-69)/12);tone(base,.35,0);tone(base*Math.pow(2,semi/12),.46,.42)}
 function resetBeats(){for(let i=1;i<=4;i++)$('beat'+i).classList.remove('active')}
 function enableAnswers(enabled){document.querySelectorAll('#answers button').forEach(b=>b.disabled=!enabled)}
 function update(){ $('hits').textContent=hits;$('tries').textContent=tries;$('streak').textContent=streak;$('rate').textContent=tries?Math.round(100*hits/tries)+'%':'—'}
 function renderModules(){const root=$('modules');root.replaceChildren();modules.forEach((m,i)=>{const b=document.createElement('button');b.className='module'+(i===selected?' selected':'');b.innerHTML='<strong>'+m.name+'</strong><small>'+m.values.map(v=>intervals[v]).join(' × ')+'</small>';b.onclick=()=>selectModule(i);root.append(b)})}
 function renderAnswers(){const root=$('answers'),demo=$('demos');root.replaceChildren();demo.replaceChildren();modules[selected].values.forEach((semi,i)=>{const b=document.createElement('button');b.textContent=(selected===6?'':(i+1)+'. ')+intervals[semi];b.disabled=true;b.onclick=()=>respond(semi);root.append(b);const d=document.createElement('button');d.textContent='♫ '+intervals[semi];d.onclick=()=>withAudio(()=>play(chooseMidi(),semi));demo.append(d)})}
 function selectModule(i){if(active)stop();selected=i;hits=tries=streak=0;update();renderModules();renderAnswers();$('moduleDescription').textContent=i===6?'Desafio final: todos os 12 intervalos em ordem aleatória. Responda clicando no nome.':'Compare apenas dois intervalos por vez. Treine até reconhecer ambos sem precisar contar semitons.';$('feedback').textContent='Módulo '+(i+1)+' selecionado. Ouça e responda pelo som.';$('feedback').className='hint';$('status').textContent='Pronto para começar.'}
-function cycle(){if(!active)return;answered=false;accept=false;const values=modules[selected].values;current=values[Math.floor(Math.random()*values.length)];currentMidi=chooseMidi();const duration=60000/Number($('bpm').value);function step(n){if(!active)return;resetBeats();$('beat'+n).classList.add('active');tick(n===1);if(n===1){$('status').textContent='Ouça o intervalo';play(currentMidi,current);enableAnswers(false)}if(n===2)$('status').textContent='Pense na sensação sonora…';if(n===3){accept=true;enableAnswers(true);$('status').textContent='Responda agora!'}if(n===4){accept=false;enableAnswers(false);$('status').textContent=answered?'Prepare-se para o próximo':'Tempo esgotado';if(!answered){tries++;streak=0;update();$('feedback').textContent='Sem resposta. Era '+intervals[current]+'.';$('feedback').className='hint bad'}}if(n<4)timeout=setTimeout(()=>step(n+1),duration);else timeout=setTimeout(()=>$('repeat').checked?cycle():stop(),duration)}step(1)}
+function cycle(){if(!active)return;answered=false;accept=false;const values=modules[selected].values;current=values[Math.floor(Math.random()*values.length)];currentMidi=chooseMidi();if(mobileAudio)playMobileWav(currentMidi,current,true);const duration=60000/Number($('bpm').value);function step(n){if(!active)return;resetBeats();$('beat'+n).classList.add('active');tick(n===1);if(n===1){$('status').textContent='Ouça o intervalo';if(!mobileAudio)play(currentMidi,current);enableAnswers(false)}if(n===2)$('status').textContent='Pense na sensação sonora…';if(n===3){accept=true;enableAnswers(true);$('status').textContent='Responda agora!'}if(n===4){accept=false;enableAnswers(false);$('status').textContent=answered?'Prepare-se para o próximo':'Tempo esgotado';if(!answered){tries++;streak=0;update();$('feedback').textContent='Sem resposta. Era '+intervals[current]+'.';$('feedback').className='hint bad'}}if(n<4)timeout=setTimeout(()=>step(n+1),duration);else timeout=setTimeout(()=>$('repeat').checked?cycle():stop(),duration)}step(1)}
 function respond(v){if(!active||!accept||answered)return;answered=true;accept=false;enableAnswers(false);tries++;if(v===current){hits++;streak++;$('feedback').textContent='✓ Correto! '+intervals[current]+'.';$('feedback').className='hint good'}else{streak=0;$('feedback').textContent='✕ Era '+intervals[current]+'. Ouça a diferença e tente novamente.';$('feedback').className='hint bad'}update();$('status').textContent='Resposta registrada'}
-function stop(){active=false;clearTimeout(timeout);resetBeats();enableAnswers(false);$('start').disabled=false;$('stop').disabled=true;$('replay').disabled=current===null;$('status').textContent='Treino pausado'}
+function stop(){active=false;if(mediaPlayer)mediaPlayer.pause();clearTimeout(timeout);resetBeats();enableAnswers(false);$('start').disabled=false;$('stop').disabled=true;$('replay').disabled=current===null;$('status').textContent='Treino pausado'}
 $('start').onclick=()=>withAudio(()=>{if(active)return;active=true;$('start').disabled=true;$('stop').disabled=false;$('replay').disabled=false;cycle()});
 $('stop').onclick=stop;$('replay').onclick=()=>{if(current!==null)withAudio(()=>play(currentMidi,current))};
 $('reset').onclick=()=>{hits=tries=streak=0;update();$('feedback').textContent='Estatísticas zeradas.'};
