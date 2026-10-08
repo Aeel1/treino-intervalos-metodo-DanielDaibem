@@ -10,7 +10,7 @@
 <label><input id="click" type="checkbox" checked> Contagem audível</label>
 <label><input id="repeat" type="checkbox" checked> Rodadas contínuas</label>
 </div></section>
-<section class="card"><h2>3. Escute e responda</h2><div class="beats"><div class="beat" id="beat1"><strong>1</strong><small>Ouvir</small></div><div class="beat" id="beat2"><strong>2</strong><small>Pensar</small></div><div class="beat" id="beat3"><strong>3</strong><small>Responder</small></div><div class="beat" id="beat4"><strong>4</strong><small>Preparar</small></div></div>
+<div class="controls" style="margin:10px 0"><button id="testAudio" type="button">🔊 Testar áudio no celular</button><span id="audioDiag" class="muted" aria-live="polite"></span></div><section class="card"><h2>3. Escute e responda</h2><div class="beats"><div class="beat" id="beat1"><strong>1</strong><small>Ouvir</small></div><div class="beat" id="beat2"><strong>2</strong><small>Pensar</small></div><div class="beat" id="beat3"><strong>3</strong><small>Responder</small></div><div class="beat" id="beat4"><strong>4</strong><small>Preparar</small></div></div>
 <div id="status" class="status" aria-live="polite">Selecione um módulo e comece.</div><div id="answers" class="answers"></div>
 <div class="controls"><button class="primary" id="start">▶ Iniciar treino</button><button id="stop" disabled>■ Parar</button><button id="replay" disabled>♫ Ouvir novamente</button><button id="reset">Zerar estatísticas</button></div>
 <p class="muted">Responda no tempo 3. Nos módulos 1 a 6, use também as teclas <b>1</b> e <b>2</b>. No módulo final, use os botões. Para ouvir cada intervalo separadamente, utilize os botões de demonstração abaixo.</p>
@@ -33,6 +33,23 @@ const ctx=()=>audio||(audio=new(window.AudioContext||window.webkitAudioContext)(
 async function unlockAudio(){const c=ctx();if(c.state!=='running')await c.resume();if(c.state!=='running')throw Error('AudioContext: '+c.state);return c;}
 async function withAudio(action){try{await unlockAudio();action()}catch(e){$('status').textContent='Áudio bloqueado: abra no Safari, confira volume e modo silencioso.';console.error(e)}}
 const mobileAudio=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+function wavTestUrl(){
+ const rate=22050,frames=rate,bytes=new ArrayBuffer(44+frames*2),view=new DataView(bytes);
+ const str=(p,v)=>{for(let i=0;i<v.length;i++)view.setUint8(p+i,v.charCodeAt(i))};
+ str(0,'RIFF');view.setUint32(4,36+frames*2,true);str(8,'WAVE');str(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,rate,true);view.setUint32(28,rate*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);str(36,'data');view.setUint32(40,frames*2,true);
+ for(let i=0;i<frames;i++){const env=Math.min(1,i/400)*Math.min(1,(frames-i)/1800);view.setInt16(44+i*2,Math.round(11000*env*Math.sin(2*Math.PI*440*i/rate)),true)}
+ return URL.createObjectURL(new Blob([bytes],{type:'audio/wav'}));
+}
+let testSound;
+$('testAudio').onclick=async()=>{
+ const msg=$('audioDiag');msg.textContent='Tentando tocar uma nota de teste...';
+ try{
+  if(testSound){testSound.pause();URL.revokeObjectURL(testSound.src)}
+  testSound=new Audio(wavTestUrl());testSound.volume=1;testSound.playsInline=true;
+  await testSound.play();msg.textContent='Nota de teste iniciada. Você conseguiu ouvir?';
+ }catch(e){msg.textContent='O navegador bloqueou o áudio: '+e.message}
+};
+
 function tone(freq,duration=.45,at=0,vol=.30){
  const c=ctx(),t=c.currentTime+at,kind=$('instrument').value;
  if(kind==='piano'){
